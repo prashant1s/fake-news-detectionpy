@@ -2,17 +2,24 @@
 import streamlit as st
 import joblib
 import numpy as np
+from pathlib import Path
 
 # --- 1. LOAD SAVED MODEL AND VECTORIZER ---
 
 @st.cache_resource 
 def load_model_and_vectorizer():
+    base_dir = Path(__file__).resolve().parent
+    model_path = base_dir / "model.joblib"
+    vectorizer_path = base_dir / "vectorizer.joblib"
     try:
-        model = joblib.load('model.joblib')
-        vectorizer = joblib.load('vectorizer.joblib')
+        model = joblib.load(model_path)
+        vectorizer = joblib.load(vectorizer_path)
         return model, vectorizer
     except FileNotFoundError:
-        st.error("Error: Model or Vectorizer file not found. Please run fakenewsprediction.py first to save the components.")
+        st.error(
+            "Error: model.joblib or vectorizer.joblib is missing in the app folder. "
+            "Train locally and push both files to GitHub for deployment."
+        )
         return None, None
 
 model, vectorizer = load_model_and_vectorizer()
