@@ -1,0 +1,16 @@
+compressed_data.csv
+
+# Model artifacts
+model.joblib
+vectorizer.joblib
+confusion_matrix.png
+
+# Retraining logs
+logs/
+
+# Python cache/env files
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
