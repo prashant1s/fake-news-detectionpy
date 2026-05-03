@@ -1,3 +1,4 @@
+# https://fake-news-detectionpy-jz8uvbbbzfxtz4hbrxwbsm.streamlit.app/
 # 📰  Fake News Detector
 
 A machine learning web application built with Streamlit that classifies news articles as Real or Fake. This project goes beyond standard text classification by combining an **NLP Machine Learning Model** (to detect fake news writing patterns) with a **Live Web Search** feature (to verify current events in real-time).
