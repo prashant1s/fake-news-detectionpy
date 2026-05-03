@@ -5,7 +5,16 @@ import nltk
 
 from nltk.corpus import stopwords
 from nltk.stem.porter import PorterStemmer
-from duckduckgo_search import DDGS
+
+# --- SAFE IMPORT (IMPORTANT) ---
+try:
+    from ddgs import DDGS
+except:
+    try:
+        from duckduckgo_search import DDGS
+    except:
+        DDGS = None  # fallback if both fail
+
 
 # --- Ensure stopwords ---
 try:
@@ -35,13 +44,16 @@ def stemming(content):
     tokens = [port_stem.stem(w) for w in tokens if w not in stop_words]
     return ' '.join(tokens)
 
-# --- Extract keywords (simple entity detection) ---
+# --- Keyword extraction ---
 def extract_keywords(text):
-    words = re.findall(r'\b[A-Z][a-z]+\b', text)
-    return " ".join(words[:4]).lower()
+    words = re.findall(r'\b[a-zA-Z]{3,}\b', text.lower())
+    return list(set(words))[:6]
 
-# --- Web search ---
+# --- Robust web search ---
 def fetch_live_context(query):
+    if DDGS is None:
+        return []
+
     try:
         results = []
         with DDGS() as ddgs:
@@ -51,34 +63,27 @@ def fetch_live_context(query):
     except:
         return []
 
-# --- Web verification (dynamic) ---
+# --- Smart verification ---
 def web_confirms_real(results, content):
     if not results:
         return False
 
-    content_lower = content.lower()
     keywords = extract_keywords(content)
 
     combined = " ".join(
         [(r.get('title', '') + " " + r.get('body', '')) for r in results]
     ).lower()
 
-    # Exact keyword phrase match
-    if keywords and keywords in combined:
-        return True
+    match_count = sum(1 for word in keywords if word in combined)
 
-    # Partial keyword match
-    words = keywords.split()
-    match_count = sum(1 for w in words if w in combined)
-
-    return match_count >= 2
+    return match_count >= 3
 
 
 # --- UI ---
-st.set_page_config(page_title=" Fake News Detector", layout="wide")
+st.set_page_config(page_title="Fake News Detector", layout="wide")
 
-st.title("📰  Fake News Detector")
-st.markdown("ML prediction with intelligent web verification")
+st.title("📰 Fake News Detector")
+st.markdown("ML prediction with web verification")
 
 st.divider()
 
@@ -98,7 +103,7 @@ else:
 
         with st.spinner("Analyzing..."):
 
-            # --- STEP 1: ML ---
+            # --- ML Prediction ---
             cleaned = stemming(content)
             vector = vectorizer.transform([cleaned])
             prediction = model.predict(vector)[0]
@@ -106,18 +111,30 @@ else:
             final_label = prediction
             reason = "ML model prediction"
 
-            # --- STEP 2: ONLY IF FAKE → WEB ---
-            if prediction == 1:
-                query = title if title else text[:150]
+            # --- Web Search ---
+            results = []
+
+            if DDGS is not None:
+                # Better query
+                if len(content.split()) < 15:
+                    query = content
+                else:
+                    query = (title if title else text[:150]) + " news"
+
                 results = fetch_live_context(query)
 
+                # fallback query
+                if not results:
+                    fallback_query = " ".join(content.split()[:6]) + " news"
+                    results = fetch_live_context(fallback_query)
+
+            # --- Verification ---
+            if prediction == 1 and results:
                 if web_confirms_real(results, content):
                     final_label = 0
                     reason = "ML predicted FAKE, but web verified as REAL"
                 else:
                     reason = "ML predicted FAKE, no strong web evidence found"
-            else:
-                results = []
 
         st.divider()
         st.header("Results")
@@ -135,17 +152,21 @@ else:
 
             st.caption(f"Decision: {reason}")
 
-        # --- Web Context ---
+        # --- Web Results ---
         with col2:
             st.subheader("🌐 Web Verification")
 
-            if results:
+            if DDGS is None:
+                st.warning("⚠️ Web search not available on this deployment")
+
+            elif results:
                 for r in results:
                     st.markdown(f"**[{r.get('title','')}]({r.get('href','#')})**")
                     st.write(r.get('body', ''))
                     st.write("---")
+
             else:
-                st.info("No web verification needed or no results found.")
+                st.info("⚠️ No results found or blocked by server")
 
 st.divider()
-st.caption("⚠️ ML is primary. Web is used only when ML predicts FAKE.")
+st.caption("⚠️ ML is primary. Web verification may fail on cloud deployments.")
