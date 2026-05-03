@@ -5,7 +5,7 @@ import nltk
 
 from nltk.corpus import stopwords
 from nltk.stem.porter import PorterStemmer
-from ddgs import DDGS
+from duckduckgo_search import DDGS
 
 # --- Ensure stopwords ---
 try:
