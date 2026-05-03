@@ -3,6 +3,7 @@ scikit-learn
 nltk
 joblib
 ddgs
+duckduckgo-search
 pandas
 numpy
 matplotlib
