@@ -1,80 +1,152 @@
-import numpy as np
-import pandas as pd
+import streamlit as st
+import joblib
 import re
 import nltk
-import joblib
-import matplotlib.pyplot as plt
-import seaborn as sns
 
 from nltk.corpus import stopwords
 from nltk.stem.porter import PorterStemmer
+from ddgs import DDGS   # ✅ FIXED
 
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.model_selection import train_test_split
-from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
+# --- Ensure stopwords ---
+try:
+    nltk.data.find('corpora/stopwords')
+except LookupError:
+    nltk.download('stopwords')
 
-# --- Setup ---
-nltk.download('stopwords')
+# --- Load model ---
+@st.cache_resource
+def load_model():
+    try:
+        model = joblib.load('model.joblib')
+        vectorizer = joblib.load('vectorizer.joblib')
+        return model, vectorizer
+    except:
+        return None, None
 
-print("\n--- 🚀 Training Fake News Model ---")
-
-# --- Load dataset ---
-df = pd.read_csv('WELFake_Dataset.csv.zip')
-df = df.fillna('')
-df['content'] = df['text'] + " " + df['title']
+model, vectorizer = load_model()
 
 # --- Preprocessing ---
 port_stem = PorterStemmer()
 stop_words = set(stopwords.words('english'))
 
-def stemming(content: str) -> str:
+def stemming(content):
     content = re.sub('[^a-zA-Z]', ' ', content)
     tokens = content.lower().split()
     tokens = [port_stem.stem(w) for w in tokens if w not in stop_words]
     return ' '.join(tokens)
 
-print("🧠 Preprocessing...")
-df['content'] = df['content'].apply(stemming)
+# --- Better keyword extraction ---
+def extract_keywords(text):
+    words = re.findall(r'\b[a-zA-Z]{3,}\b', text.lower())
+    return list(set(words))[:6]   # more coverage
 
-# --- Features ---
-X = df['content'].values
-y = df['label'].values
+# --- Web search (robust) ---
+def fetch_live_context(query):
+    try:
+        results = []
+        with DDGS() as ddgs:
+            for r in ddgs.text(query, max_results=5):
+                results.append(r)
+        return results
+    except:
+        return []
 
-vectorizer = TfidfVectorizer(
-    max_features=5000,
-    ngram_range=(1, 2),
-    stop_words='english'
-)
+# --- Smart verification ---
+def web_confirms_real(results, content):
+    if not results:
+        return False
 
-X = vectorizer.fit_transform(X)
+    keywords = extract_keywords(content)
 
-# --- Split ---
-X_train, X_test, y_train, y_test = train_test_split(
-    X, y, test_size=0.2, stratify=y, random_state=42
-)
+    combined = " ".join(
+        [(r.get('title', '') + " " + r.get('body', '')) for r in results]
+    ).lower()
 
-# --- Model ---
-print("🤖 Training...")
-model = LogisticRegression(max_iter=1000, class_weight='balanced')
-model.fit(X_train, y_train)
+    match_count = sum(1 for word in keywords if word in combined)
 
-# --- Evaluate ---
-y_pred = model.predict(X_test)
+    return match_count >= 3   # stronger threshold
 
-print("\nAccuracy:", accuracy_score(y_test, y_pred))
-print("\nClassification Report:\n", classification_report(y_test, y_pred))
 
-cm = confusion_matrix(y_test, y_pred)
-plt.figure(figsize=(6, 4))
-sns.heatmap(cm, annot=True, fmt='d')
-plt.title("Confusion Matrix")
-plt.xlabel("Predicted")
-plt.ylabel("Actual")
-plt.show()
+# --- UI ---
+st.set_page_config(page_title="Fake News Detector", layout="wide")
 
-# --- Save ---
-joblib.dump(model, 'model.joblib')
-joblib.dump(vectorizer, 'vectorizer.joblib')
+st.title("📰 Fake News Detector")
+st.markdown("ML prediction with smart web verification")
 
-print("✅ Model and vectorizer saved successfully")
+st.divider()
+
+if not model:
+    st.error("❌ Model not found. Run training script first.")
+else:
+    title = st.text_input("News Title")
+    text = st.text_area("News Content", height=200)
+
+    if st.button("Analyze", type="primary"):
+
+        if not title and not text:
+            st.warning("Enter some content")
+            st.stop()
+
+        content = (text + " " + title).strip()
+
+        with st.spinner("Analyzing..."):
+
+            # --- STEP 1: ML ---
+            cleaned = stemming(content)
+            vector = vectorizer.transform([cleaned])
+            prediction = model.predict(vector)[0]
+
+            final_label = prediction
+            reason = "ML model prediction"
+
+            # --- STEP 2: ALWAYS SEARCH FOR SHORT INPUT ---
+            if len(content.split()) < 15:
+                results = fetch_live_context(content)
+            else:
+                query = title if title else text[:150]
+                query = query + " news"
+                results = fetch_live_context(query)
+
+                # fallback
+                if not results:
+                    query = " ".join(content.split()[:6]) + " news"
+                    results = fetch_live_context(query)
+
+            # --- STEP 3: VERIFY IF FAKE ---
+            if prediction == 1 and results:
+                if web_confirms_real(results, content):
+                    final_label = 0
+                    reason = "ML predicted FAKE, but web verified as REAL"
+                else:
+                    reason = "ML predicted FAKE, no strong web evidence found"
+
+        st.divider()
+        st.header("Results")
+
+        col1, col2 = st.columns(2)
+
+        # --- Final Verdict ---
+        with col1:
+            st.subheader("🤖 Final Verdict")
+
+            if final_label == 0:
+                st.success("✅ REAL NEWS")
+            else:
+                st.error("🚨 FAKE NEWS")
+
+            st.caption(f"Decision: {reason}")
+
+        # --- Web Context ---
+        with col2:
+            st.subheader("🌐 Web Verification")
+
+            if results:
+                for r in results:
+                    st.markdown(f"**[{r.get('title','')}]({r.get('href','#')})**")
+                    st.write(r.get('body', ''))
+                    st.write("---")
+            else:
+                st.info("No results found.")
+
+st.divider()
+st.caption("⚠️ ML is primary. Web is used when needed.")
