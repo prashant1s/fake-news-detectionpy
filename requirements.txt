@@ -1,4 +1,9 @@
 streamlit
-joblib
-numpy
 scikit-learn
+pandas
+numpy
+nltk
+joblib
+matplotlib
+seaborn
+duckduckgo-search

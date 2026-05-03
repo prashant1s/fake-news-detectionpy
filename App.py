@@ -1,68 +1,151 @@
-# app.py
 import streamlit as st
 import joblib
-import numpy as np
-from pathlib import Path
+import re
+import nltk
 
-# --- 1. LOAD SAVED MODEL AND VECTORIZER ---
+from nltk.corpus import stopwords
+from nltk.stem.porter import PorterStemmer
+from ddgs import DDGS
 
-@st.cache_resource 
-def load_model_and_vectorizer():
-    base_dir = Path(__file__).resolve().parent
-    model_path = base_dir / "model.joblib"
-    vectorizer_path = base_dir / "vectorizer.joblib"
+# --- Ensure stopwords ---
+try:
+    nltk.data.find('corpora/stopwords')
+except LookupError:
+    nltk.download('stopwords')
+
+# --- Load model ---
+@st.cache_resource
+def load_model():
     try:
-        model = joblib.load(model_path)
-        vectorizer = joblib.load(vectorizer_path)
+        model = joblib.load('model.joblib')
+        vectorizer = joblib.load('vectorizer.joblib')
         return model, vectorizer
-    except FileNotFoundError:
-        st.error(
-            "Error: model.joblib or vectorizer.joblib is missing in the app folder. "
-            "Train locally and push both files to GitHub for deployment."
-        )
+    except:
         return None, None
 
-model, vectorizer = load_model_and_vectorizer()
+model, vectorizer = load_model()
+
+# --- Preprocessing ---
+port_stem = PorterStemmer()
+stop_words = set(stopwords.words('english'))
+
+def stemming(content):
+    content = re.sub('[^a-zA-Z]', ' ', content)
+    tokens = content.lower().split()
+    tokens = [port_stem.stem(w) for w in tokens if w not in stop_words]
+    return ' '.join(tokens)
+
+# --- Extract keywords (simple entity detection) ---
+def extract_keywords(text):
+    words = re.findall(r'\b[A-Z][a-z]+\b', text)
+    return " ".join(words[:4]).lower()
+
+# --- Web search ---
+def fetch_live_context(query):
+    try:
+        results = []
+        with DDGS() as ddgs:
+            for r in ddgs.text(query, max_results=5):
+                results.append(r)
+        return results
+    except:
+        return []
+
+# --- Web verification (dynamic) ---
+def web_confirms_real(results, content):
+    if not results:
+        return False
+
+    content_lower = content.lower()
+    keywords = extract_keywords(content)
+
+    combined = " ".join(
+        [(r.get('title', '') + " " + r.get('body', '')) for r in results]
+    ).lower()
+
+    # Exact keyword phrase match
+    if keywords and keywords in combined:
+        return True
+
+    # Partial keyword match
+    words = keywords.split()
+    match_count = sum(1 for w in words if w in combined)
+
+    return match_count >= 2
 
 
-# --- 2. STREAMLIT APP LAYOUT AND LOGIC ---
+# --- UI ---
+st.set_page_config(page_title=" Fake News Detector", layout="wide")
 
-st.set_page_config(page_title="Fake News Detector", layout="centered")
-st.title("📰  Fake News Prediction")
-st.markdown("Enter the news title and body text below for classification.")
-
+st.title("📰  Fake News Detector")
+st.markdown("ML prediction with intelligent web verification")
 
 st.divider()
 
-if model and vectorizer: 
-    # Input fields
-    news_title = st.text_input("News Title", placeholder="Enter the headline of the article...")
-    news_text = st.text_area("News Body Text", placeholder="Paste the full article content here...", height=200)
+if not model:
+    st.error("❌ Model not found. Run training script first.")
+else:
+    title = st.text_input("News Title")
+    text = st.text_area("News Content", height=200)
 
-    # Prediction button
-    if st.button("Analyze Credibility", type="primary"):
-        if not news_title and not news_text:
-            st.warning("Please enter at least a title or some text to analyze.")
-        else:
-            # 1. Combine content from title and text
-            news_content = news_text + " " + news_title
-            
-            # 2. Vectorize the content (no stemming, as per your training script)
-            processed_content = [news_content] 
-            vectorized_input = vectorizer.transform(processed_content)
-            
-            # 3. code for doing  the prediction
-            prediction = model.predict(vectorized_input)[0]
-            
-            # 4. for Display the result news are real or fake 
-            st.subheader("Analysis Result:")
-            
-            if prediction == 0:
-                st.success("✅ Prediction: REAL NEWS")
-                st.info("The model classifies this article as likely **Genuine** (Label: 0).")
+    if st.button("Analyze", type="primary"):
+
+        if not title and not text:
+            st.warning("Enter some content")
+            st.stop()
+
+        content = (text + " " + title).strip()
+
+        with st.spinner("Analyzing..."):
+
+            # --- STEP 1: ML ---
+            cleaned = stemming(content)
+            vector = vectorizer.transform([cleaned])
+            prediction = model.predict(vector)[0]
+
+            final_label = prediction
+            reason = "ML model prediction"
+
+            # --- STEP 2: ONLY IF FAKE → WEB ---
+            if prediction == 1:
+                query = title if title else text[:150]
+                results = fetch_live_context(query)
+
+                if web_confirms_real(results, content):
+                    final_label = 0
+                    reason = "ML predicted FAKE, but web verified as REAL"
+                else:
+                    reason = "ML predicted FAKE, no strong web evidence found"
             else:
-                st.error("🚨 Prediction: FAKE NEWS")
-                st.warning("The model classifies this article as likely **Fabricated** (Label: 1).")
+                results = []
+
+        st.divider()
+        st.header("Results")
+
+        col1, col2 = st.columns(2)
+
+        # --- Final Verdict ---
+        with col1:
+            st.subheader("🤖 Final Verdict")
+
+            if final_label == 0:
+                st.success("✅ REAL NEWS")
+            else:
+                st.error("🚨 FAKE NEWS")
+
+            st.caption(f"Decision: {reason}")
+
+        # --- Web Context ---
+        with col2:
+            st.subheader("🌐 Web Verification")
+
+            if results:
+                for r in results:
+                    st.markdown(f"**[{r.get('title','')}]({r.get('href','#')})**")
+                    st.write(r.get('body', ''))
+                    st.write("---")
+            else:
+                st.info("No web verification needed or no results found.")
 
 st.divider()
-st.caption("Note: 0 = REAL, 1 = FAKE.")
+st.caption("⚠️ ML is primary. Web is used only when ML predicts FAKE.")
